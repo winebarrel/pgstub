@@ -1,6 +1,7 @@
 # pgstub
 
 [![CI](https://github.com/winebarrel/pgstub/actions/workflows/ci.yml/badge.svg)](https://github.com/winebarrel/pgstub/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/winebarrel/pgstub/graph/badge.svg?token=40xNWfPaX8)](https://codecov.io/gh/winebarrel/pgstub)
 [![AI Generated](https://img.shields.io/badge/AI%20Generated-Claude-orange?logo=anthropic)](https://claude.ai/claude-code)
 
 pgstub is a PostgreSQL wire protocol stub for tests.
