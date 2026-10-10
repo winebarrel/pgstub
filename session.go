@@ -242,7 +242,7 @@ func runtimeParamNames(params map[string]string) []string {
 }
 
 func (ss *session) query(ctx context.Context, sql string) {
-	if strings.TrimSpace(sql) == "" {
+	if isEmptyQuery(sql) {
 		ss.be.Send(&pgproto3.EmptyQueryResponse{})
 		ss.readyForQuery()
 		return
@@ -558,6 +558,61 @@ func (ss *session) textArgs(params [][]byte, formats []int16, oids []uint32) ([]
 func (ss *session) complete(tag, sql string) {
 	ss.be.Send(&pgproto3.CommandComplete{CommandTag: []byte(tag)})
 	ss.tx = txStatusAfter(ss.tx, tag, sql)
+}
+
+// isEmptyQuery reports whether sql has only whitespace and comments.
+// PostgreSQL answers such a query with EmptyQueryResponse, and database/sql
+// with the pgx driver pings with "-- ping".
+func isEmptyQuery(sql string) bool {
+	for {
+		sql = strings.TrimSpace(sql)
+
+		switch {
+		case sql == "":
+			return true
+		case strings.HasPrefix(sql, "--"):
+			_, rest, ok := strings.Cut(sql, "\n")
+
+			if !ok {
+				return true
+			}
+
+			sql = rest
+		case strings.HasPrefix(sql, "/*"):
+			rest, ok := skipBlockComment(sql)
+
+			if !ok {
+				return false
+			}
+
+			sql = rest
+		default:
+			return false
+		}
+	}
+}
+
+// skipBlockComment returns what follows the block comment at the start of
+// sql. Block comments nest. It returns false if the comment is not closed.
+func skipBlockComment(sql string) (string, bool) {
+	depth := 0
+
+	for i := 0; i+1 < len(sql); i++ {
+		switch sql[i : i+2] {
+		case "/*":
+			depth++
+			i++
+		case "*/":
+			depth--
+			i++
+
+			if depth == 0 {
+				return sql[i+1:], true
+			}
+		}
+	}
+
+	return "", false
 }
 
 // stayInTx matches the statements that end with a COMMIT or ROLLBACK tag but
