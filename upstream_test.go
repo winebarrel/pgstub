@@ -300,31 +300,74 @@ func TestRecordReplay(t *testing.T) {
 	assert.Equal(recorded, replayed)
 }
 
-func TestRecordStartupReject(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-	ctx := context.Background()
-	connStr, _ := upstream(t)
-	file := filepath.Join(t.TempDir(), "record.yaml")
+// connectWith connects with runtime parameters.
+func connectWith(connStr string, params map[string]string) error {
+	cfg, err := pgx.ParseConfig(connStr)
 
-	connectRO := func(connStr string) error {
-		cfg, err := pgx.ParseConfig(connStr)
-		require.NoError(err)
-		cfg.RuntimeParams["default_transaction_read_only"] = "bogus"
-		_, err = pgx.ConnectConfig(ctx, cfg)
+	if err != nil {
 		return err
 	}
 
+	for k, v := range params {
+		cfg.RuntimeParams[k] = v
+	}
+
+	conn, err := pgx.ConnectConfig(context.Background(), cfg)
+
+	if err == nil {
+		conn.Close(context.Background())
+	}
+
+	return err
+}
+
+func TestRecordStartupReject(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+	connStr, _ := upstream(t)
+	file := filepath.Join(t.TempDir(), "record.yaml")
+
+	readOnly := map[string]string{"default_transaction_read_only": "bogus"}
+	timeout := map[string]string{"statement_timeout": "bogus", "search_path": "public"}
+
 	s := pgstub.Start(t, pgstub.Record(connStr, file))
-	assert.Equal("22023", pgErrorCode(connectRO(s.ConnString())))
+	assert.Equal("22023", pgErrorCode(connectWith(s.ConnString(), readOnly)))
+	assert.Equal("22023", pgErrorCode(connectWith(s.ConnString(), readOnly)))
+	assert.Equal("22023", pgErrorCode(connectWith(s.ConnString(), timeout)))
+	assert.NoError(connectWith(s.ConnString(), nil))
 	require.NoError(s.Close())
 
+	// Each rejected set of parameters is recorded once.
 	b, err := os.ReadFile(file)
 	require.NoError(err)
-	assert.Contains(string(b), "params: [default_transaction_read_only]")
+	assert.Contains(string(b), `startup_rejects:
+  - params: [default_transaction_read_only]
+    error: {code: "22023", message: parameter "default_transaction_read_only" requires a Boolean value}
+  - params: [search_path, statement_timeout]
+    error: {code: "22023", message: 'invalid value for parameter "statement_timeout": "bogus"'}
+`)
 
 	r := pgstub.Start(t, pgstub.Replay(file))
-	assert.Equal("22023", pgErrorCode(connectRO(r.ConnString())))
+	assert.Equal("22023", pgErrorCode(connectWith(r.ConnString(), readOnly)))
+	assert.Equal("22023", pgErrorCode(connectWith(r.ConnString(), timeout)))
+	assert.NoError(connectWith(r.ConnString(), map[string]string{"search_path": "public"}))
+	assert.NoError(connectWith(r.ConnString(), nil))
+}
+
+func TestRecordStartupErrorNotAboutParams(t *testing.T) {
+	connStr, _ := upstream(t)
+	file := filepath.Join(t.TempDir(), "record.yaml")
+
+	// The database does not exist. That has nothing to do with the
+	// parameters, so it is not recorded.
+	noDB := strings.Replace(connStr, "/postgres?", "/nosuchdb?", 1)
+	s := pgstub.Start(t, pgstub.Record(noDB, file))
+	assert.Equal(t, "3D000", pgErrorCode(connectWith(s.ConnString(), map[string]string{"search_path": "public"})))
+	require.NoError(t, s.Close())
+
+	b, err := os.ReadFile(file)
+	require.NoError(t, err)
+	assert.NotContains(t, string(b), "startup_rejects")
 }
 
 func TestRecordWithExpect(t *testing.T) {
@@ -350,4 +393,44 @@ func TestRecordWithExpect(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(b), "SELECT 'recorded'")
 	assert.NotContains(t, string(b), "expected")
+}
+
+// txStatuses runs nested transactions and returns the status after each
+// step.
+func txStatuses(t *testing.T, conn *pgx.Conn) string {
+	t.Helper()
+
+	ctx := context.Background()
+	var out []byte
+	step := func(err error) {
+		require.NoError(t, err)
+		out = append(out, conn.PgConn().TxStatus())
+	}
+
+	tx, err := conn.Begin(ctx)
+	step(err)
+	nested, err := tx.Begin(ctx)
+	step(err)
+	_, err = nested.Exec(ctx, `SELECT nope`)
+	require.Error(t, err)
+	step(nil)
+	step(nested.Rollback(ctx))
+	step(tx.Commit(ctx))
+
+	for _, sql := range []string{"BEGIN", "COMMIT AND CHAIN", "ROLLBACK AND NO CHAIN", "BEGIN", "ROLLBACK AND CHAIN;", "ROLLBACK WORK"} {
+		_, err := conn.Exec(ctx, sql)
+		step(err)
+	}
+
+	return string(out)
+}
+
+func TestTxStatus(t *testing.T) {
+	connStr, _ := upstream(t)
+
+	want := txStatuses(t, connect(t, connStr))
+	assert.Equal(t, "TTETITTITTI", want)
+
+	s := pgstub.Start(t, pgstub.Passthrough(connStr))
+	assert.Equal(t, want, txStatuses(t, connect(t, s.ConnString())))
 }

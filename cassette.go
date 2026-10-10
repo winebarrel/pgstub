@@ -14,20 +14,16 @@ import (
 // cassette is the record file. It holds the same kind of answers as
 // expectations, as YAML that people can read and edit.
 type cassette struct {
-	RecordedAt    time.Time      `yaml:"recorded_at,omitempty"`
-	ServerVersion string         `yaml:"server_version,omitempty"`
-	Startup       *startupRecord `yaml:"startup,omitempty"`
-	Exchanges     []*exchange    `yaml:"exchanges"`
+	RecordedAt     time.Time        `yaml:"recorded_at,omitempty"`
+	ServerVersion  string           `yaml:"server_version,omitempty"`
+	StartupRejects []*startupReject `yaml:"startup_rejects,omitempty"`
+	Exchanges      []*exchange      `yaml:"exchanges"`
 }
 
-type startupRecord struct {
-	Reject *rejectRecord `yaml:"reject"`
-}
-
-type rejectRecord struct {
-	Params  []string `yaml:"params,flow"`
-	Code    string   `yaml:"code"`
-	Message string   `yaml:"message"`
+// startupReject is a set of startup parameters that the server rejected.
+type startupReject struct {
+	Params []string `yaml:"params,flow"`
+	Error  pgError  `yaml:"error,flow"`
 }
 
 // exchange is a statement and the server's answer. If a simple query has

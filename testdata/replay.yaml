@@ -1,10 +1,8 @@
 recorded_at: 2026-07-23T00:00:00Z
 server_version: "16.9"
-startup:
-  reject:
-    params: [default_transaction_read_only]
-    code: 0A000
-    message: setting configuration parameter "default_transaction_read_only" not supported
+startup_rejects:
+  - params: [default_transaction_read_only]
+    error: {code: 0A000, message: setting configuration parameter "default_transaction_read_only" not supported}
 exchanges:
   - query: |-
       SELECT n.nspname, c.relname, i.relname, pg_get_indexdef(x.indexrelid)

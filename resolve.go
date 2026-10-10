@@ -3,6 +3,7 @@ package pgstub
 import (
 	"context"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -192,19 +193,29 @@ func (s *Stub) startupReject(params map[string]string) *pgError {
 		}
 	}
 
-	if s.cfg.mode == modeReplay && s.cassette.Startup != nil && s.cassette.Startup.Reject != nil {
-		r := s.cassette.Startup.Reject
-
-		if hasAllParams(r.Params, params) {
-			return &pgError{Code: r.Code, Message: r.Message}
+	if s.cfg.mode == modeReplay {
+		for _, r := range s.cassette.StartupRejects {
+			if hasAllParams(r.Params, params) {
+				err := r.Error
+				return &err
+			}
 		}
 	}
 
 	return nil
 }
 
+// notAboutParams are the SQLSTATE classes of startup errors that have
+// nothing to do with the parameters: connection, authentication, database
+// name, resources and server state. They can be temporary, such as an
+// expired token, so they are not recorded.
+var notAboutParams = []string{"08", "28", "3D", "53", "57"}
+
+// recordReject records that the server rejected a startup with params. It
+// is recorded only when the client sent parameters and the error can be
+// about them.
 func (s *Stub) recordReject(params []string, err *pgError) {
-	if s.cfg.mode != modeRecord {
+	if s.cfg.mode != modeRecord || len(params) == 0 || slices.Contains(notAboutParams, err.Code[:min(2, len(err.Code))]) {
 		return
 	}
 
@@ -213,7 +224,13 @@ func (s *Stub) recordReject(params []string, err *pgError) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.cassette.Startup = &startupRecord{Reject: &rejectRecord{Params: params, Code: err.Code, Message: err.Message}}
+	for _, r := range s.cassette.StartupRejects {
+		if slices.Equal(r.Params, params) {
+			return
+		}
+	}
+
+	s.cassette.StartupRejects = append(s.cassette.StartupRejects, &startupReject{Params: params, Error: *err})
 }
 
 func (s *Stub) recordServerVersion(v string) {

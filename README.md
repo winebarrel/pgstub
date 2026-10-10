@@ -80,11 +80,9 @@ The record file is YAML. You can read it and edit it by hand.
 ```yaml
 recorded_at: 2026-07-23T00:00:00Z
 server_version: "16.9"
-startup:
-  reject:
-    params: [default_transaction_read_only]
-    code: 0A000
-    message: setting configuration parameter "default_transaction_read_only" not supported
+startup_rejects:
+  - params: [default_transaction_read_only]
+    error: {code: 0A000, message: setting configuration parameter "default_transaction_read_only" not supported}
 exchanges:
   - query: SELECT relname FROM pg_class WHERE relnamespace = $1::regnamespace
     args: [public]
@@ -107,6 +105,7 @@ exchanges:
 - `types` is omitted when all columns are text.
 - `complete` is omitted when it is `SELECT` and the row count.
 - If one query has several statements, it has a `results` list instead.
+- `startup_rejects` lists the startup parameters that the server rejected. A connection that sets all the parameters of an entry is rejected. Errors that are not about the parameters, such as authentication errors, are not recorded.
 
 ### Command
 
@@ -120,5 +119,6 @@ pgstub replay schema.yaml
 ## Limitations
 
 - COPY, LISTEN/NOTIFY and replication are not supported.
+- The row limit of the extended protocol Execute message is ignored. All rows are sent at once.
 - Clients connect to the stub without TLS. The connection to the server follows its connection string.
 - The stub is for tests. It is not for load testing or production use.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -271,7 +272,7 @@ func (ss *session) query(ctx context.Context, sql string) {
 			}
 		}
 
-		ss.complete(r.commandTag())
+		ss.complete(r.commandTag(), sql)
 	}
 
 	ss.readyForQuery()
@@ -416,7 +417,7 @@ func (ss *session) execute(ctx context.Context, m *pgproto3.Execute) {
 		ss.be.Send(&pgproto3.DataRow{Values: values})
 	}
 
-	ss.complete(r.commandTag())
+	ss.complete(r.commandTag(), c.sql)
 }
 
 // exec runs a statement on the server.
@@ -554,15 +555,34 @@ func (ss *session) textArgs(params [][]byte, formats []int16, oids []uint32) ([]
 	return args, nil
 }
 
-func (ss *session) complete(tag string) {
+func (ss *session) complete(tag, sql string) {
 	ss.be.Send(&pgproto3.CommandComplete{CommandTag: []byte(tag)})
+	ss.tx = txStatusAfter(ss.tx, tag, sql)
+}
 
+// stayInTx matches the statements that end with a COMMIT or ROLLBACK tag but
+// leave the session in a transaction: ROLLBACK TO a savepoint, and COMMIT or
+// ROLLBACK AND CHAIN.
+var stayInTx = regexp.MustCompile(`(?i)^(ROLLBACK|ABORT)(\s+(WORK|TRANSACTION))?\s+TO\s|\sAND\s+CHAIN\s*;?\s*$`)
+
+// txStatusAfter returns the transaction status after a statement. It is
+// worked out the same way in every mode, so a replay sees the same status
+// as the recording.
+func txStatusAfter(status byte, tag, sql string) byte {
 	switch tag {
 	case "BEGIN", "START TRANSACTION":
-		ss.tx = 'T'
+		return 'T'
 	case "COMMIT", "ROLLBACK":
-		ss.tx = 'I'
+		if stayInTx.MatchString(strings.TrimSpace(sql)) {
+			return 'T'
+		}
+
+		return 'I'
+	case "PREPARE TRANSACTION":
+		return 'I'
 	}
+
+	return status
 }
 
 func (ss *session) sendError(e *pgError) {
