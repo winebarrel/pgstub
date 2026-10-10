@@ -39,7 +39,24 @@ func TestApply(t *testing.T) {
 	s.Expect(`ALTER TABLE t DROP COLUMN c`).
 		Return(pgstub.Error("0A000", "unsupported ALTER TABLE DROP COLUMN statement"))
 
-	// Run the program under test with s.ConnString().
+	// The program under test connects to the stub as to any PostgreSQL.
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, s.ConnString())
+	require.NoError(t, err)
+	defer conn.Close(ctx)
+
+	var jobID string
+	err = conn.QueryRow(ctx, `CREATE INDEX ASYNC idx ON t (c)`).Scan(&jobID)
+	require.NoError(t, err)
+	assert.Equal(t, "j1", jobID)
+
+	_, err = conn.Exec(ctx, `CALL sys.wait_for_job('j1')`)
+	require.NoError(t, err)
+
+	_, err = conn.Exec(ctx, `ALTER TABLE t DROP COLUMN c`)
+	var pgErr *pgconn.PgError
+	require.True(t, errors.As(err, &pgErr))
+	assert.Equal(t, "0A000", pgErr.Code)
 
 	s.AssertExpectations(t)
 }
