@@ -27,6 +27,8 @@ go install github.com/winebarrel/pgstub/cmd/pgstub@latest
 
 ## Usage
 
+The example uses database/sql with the pgx driver (`github.com/jackc/pgx/v5/stdlib`). Any PostgreSQL client works.
+
 ```go
 func TestApply(t *testing.T) {
 	// The stub stops when the test ends. No need to close it.
@@ -40,20 +42,21 @@ func TestApply(t *testing.T) {
 		Return(pgstub.Error("0A000", "unsupported ALTER TABLE DROP COLUMN statement"))
 
 	// The program under test connects to the stub as to any PostgreSQL.
-	ctx := context.Background()
-	conn, err := pgx.Connect(ctx, s.ConnString())
+	db, err := sql.Open("pgx", s.ConnString())
 	require.NoError(t, err)
-	defer conn.Close(ctx)
+	defer db.Close()
+
+	ctx := t.Context()
 
 	var jobID string
-	err = conn.QueryRow(ctx, `CREATE INDEX ASYNC idx ON t (c)`).Scan(&jobID)
+	err = db.QueryRowContext(ctx, `CREATE INDEX ASYNC idx ON t (c)`).Scan(&jobID)
 	require.NoError(t, err)
 	assert.Equal(t, "j1", jobID)
 
-	_, err = conn.Exec(ctx, `CALL sys.wait_for_job('j1')`)
+	_, err = db.ExecContext(ctx, `CALL sys.wait_for_job('j1')`)
 	require.NoError(t, err)
 
-	_, err = conn.Exec(ctx, `ALTER TABLE t DROP COLUMN c`)
+	_, err = db.ExecContext(ctx, `ALTER TABLE t DROP COLUMN c`)
 	var pgErr *pgconn.PgError
 	require.True(t, errors.As(err, &pgErr))
 	assert.Equal(t, "0A000", pgErr.Code)
