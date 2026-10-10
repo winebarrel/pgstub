@@ -567,7 +567,9 @@ var stayInTx = regexp.MustCompile(`(?i)^(ROLLBACK|ABORT)(\s+(WORK|TRANSACTION))?
 
 // txStatusAfter returns the transaction status after a statement. It is
 // worked out the same way in every mode, so a replay sees the same status
-// as the recording.
+// as the recording. It looks at the whole query text, so it can be wrong for
+// a query with several statements, such as "ROLLBACK TO sp; COMMIT", or with
+// a leading comment.
 func txStatusAfter(status byte, tag, sql string) byte {
 	switch tag {
 	case "BEGIN", "START TRANSACTION":
