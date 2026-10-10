@@ -29,6 +29,7 @@ go install github.com/winebarrel/pgstub/cmd/pgstub@latest
 
 ```go
 func TestApply(t *testing.T) {
+	// The stub stops when the test ends. No need to close it.
 	s := pgstub.Start(t)
 
 	s.Expect(`CREATE INDEX ASYNC idx ON t (c)`).
