@@ -68,6 +68,43 @@ Other options:
 - `Redact(old, new)`: replace a value, such as an account ID, in the recorded file. Pass the same option to `Replay`.
 - `UpstreamPassword(f)`: get the server password from a function for each connection. Use it for tokens that expire.
 
+### Record and replay
+
+Record once against a real server, commit the file, and replay it in CI. A common way is to record when a connection string is set, and replay otherwise:
+
+```go
+func TestApplyDSQL(t *testing.T) {
+	file := "testdata/apply_dsql.yaml"
+	opts := []pgstub.Option{pgstub.Replay(file)}
+
+	if dsn := os.Getenv("DSQL_DSN"); dsn != "" {
+		opts = []pgstub.Option{pgstub.Record(dsn, file)}
+	}
+
+	opts = append(opts, pgstub.Redact("123456789012", "ACCOUNT_ID"))
+	s := pgstub.Start(t, opts...)
+
+	// Run the program under test with s.ConnString().
+}
+```
+
+To record, run the test with the connection string. The password can come from `PGPASSWORD`:
+
+```sh
+export DSQL_DSN="postgres://admin@abc123.dsql.us-east-1.on.aws/postgres?sslmode=require"
+export PGPASSWORD="$(aws dsql generate-db-connect-admin-auth-token --hostname abc123.dsql.us-east-1.on.aws --region us-east-1)"
+go test -run TestApplyDSQL .
+```
+
+Without `DSQL_DSN`, the same test replays the file and needs no server.
+
+Things to know:
+
+- The file is written when the test ends. Statements answered by expectations are not recorded.
+- The server must be in the same state each time you record. Clean up what the test creates, before and after.
+- If the program sends a different statement or different parameters, replay fails. Record again. The diff of the file shows what changed on the server side too.
+- Values that change on every run, such as timestamps and generated IDs, cannot match a recording if the program sends them back as parameters.
+
 ### Matching
 
 Two statements match when their text is the same after whitespace is normalized, and their parameters are the same.
@@ -110,12 +147,26 @@ exchanges:
 
 ### Command
 
-The command serves or records a file until you stop it with Ctrl-C. It prints the connection string first.
+The command does the same for tests that are not written in Go. It serves or records a file until you stop it with Ctrl-C, and prints the connection string first. It listens on `127.0.0.1:5432` unless `-l` says otherwise.
+
+To record, start the command, run your tests against it, then stop it to write the file:
 
 ```sh
-pgstub record -u "postgres://admin@cluster.dsql.us-east-1.on.aws/postgres?sslmode=require" schema.yaml
-pgstub replay schema.yaml
+pgstub record -u "postgres://admin@abc123.dsql.us-east-1.on.aws/postgres?sslmode=require" schema.yaml
+# In another terminal:
+psql "postgres://pgstub@127.0.0.1:5432/pgstub?sslmode=disable" -f apply.sql
+# Then press Ctrl-C in the first terminal.
 ```
+
+To replay, start the command in the background and run the same tests:
+
+```sh
+pgstub replay schema.yaml &
+psql "postgres://pgstub@127.0.0.1:5432/pgstub?sslmode=disable" -f apply.sql
+kill %1
+```
+
+A statement that is not in the file gets an error, and the command prints it to stderr.
 
 ## Limitations
 
