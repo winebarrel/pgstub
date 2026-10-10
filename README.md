@@ -46,20 +46,16 @@ func TestApply(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	ctx := t.Context()
-
 	var jobID string
-	err = db.QueryRowContext(ctx, `CREATE INDEX ASYNC idx ON t (c)`).Scan(&jobID)
+	err = db.QueryRow(`CREATE INDEX ASYNC idx ON t (c)`).Scan(&jobID)
 	require.NoError(t, err)
 	assert.Equal(t, "j1", jobID)
 
-	_, err = db.ExecContext(ctx, `CALL sys.wait_for_job('j1')`)
+	_, err = db.Exec(`CALL sys.wait_for_job('j1')`)
 	require.NoError(t, err)
 
-	_, err = db.ExecContext(ctx, `ALTER TABLE t DROP COLUMN c`)
-	var pgErr *pgconn.PgError
-	require.True(t, errors.As(err, &pgErr))
-	assert.Equal(t, "0A000", pgErr.Code)
+	_, err = db.Exec(`ALTER TABLE t DROP COLUMN c`)
+	assert.ErrorContains(t, err, "SQLSTATE 0A000")
 
 	s.AssertExpectations(t)
 }
