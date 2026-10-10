@@ -16,9 +16,13 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: [15, 16, 17, 18]
     services:
       postgres:
-        image: postgres:18
+        image: postgres:${{ matrix.postgres }}
         env:
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:
@@ -34,7 +38,9 @@ jobs:
         with:
           go-version-file: go.mod
       - uses: golangci/golangci-lint-action@v9
+        if: matrix.postgres == 18
       - run: make TEST_OPTS='-coverprofile=coverage.txt'
       - uses: codecov/codecov-action@v7
+        if: matrix.postgres == 18
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
