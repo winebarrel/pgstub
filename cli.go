@@ -38,7 +38,10 @@ type RecordCmd struct {
 	Listen   string   `short:"l" default:"127.0.0.1:5432" env:"PGSTUB_LISTEN" help:"Address to listen on."`
 	Upstream string   `short:"u" required:"" env:"PGSTUB_UPSTREAM" help:"Connection string of the server. PGPASSWORD can hold the password."`
 	Redact   []string `placeholder:"OLD=NEW" help:"Replace OLD with NEW in the recorded file."`
-	File     string   `arg:"" type:"path" help:"Record file to write on exit."`
+	// NormalizeOIDs and NormalizeColumn keep a recording made again the same.
+	NormalizeOIDs   bool     `name:"normalize-oids" help:"Replace object OIDs in the recorded file with numbers that are the same on every recording."`
+	NormalizeColumn []string `placeholder:"COLUMN=PREFIX" help:"Replace each value of the result column COLUMN with PREFIX and a number, wherever it appears in the recorded file."`
+	File            string   `arg:"" type:"path" help:"Record file to write on exit."`
 }
 
 func (cmd *RecordCmd) Run(c *Context) error {
@@ -46,6 +49,20 @@ func (cmd *RecordCmd) Run(c *Context) error {
 
 	if err != nil {
 		return err
+	}
+
+	if cmd.NormalizeOIDs {
+		opts = append(opts, NormalizeOIDs())
+	}
+
+	for _, p := range cmd.NormalizeColumn {
+		column, prefix, ok := strings.Cut(p, "=")
+
+		if !ok || column == "" || prefix == "" {
+			return fmt.Errorf("--normalize-column %q: want COLUMN=PREFIX", p)
+		}
+
+		opts = append(opts, NormalizeColumn(column, prefix))
 	}
 
 	return serve(c, cmd.Listen, append(opts, Record(cmd.Upstream, cmd.File))...)

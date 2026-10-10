@@ -85,6 +85,8 @@ Other options:
 - `Strict()`: in passthrough mode, fail the test instead of sending the statement to the server.
 - `Redact(old, new)`: replace a value, such as an account ID, in the recorded file. Pass the same option to `Replay`.
 - `UpstreamPassword(f)`: get the server password from a function for each connection. Use it for tokens that expire.
+- `NormalizeOIDs()`: in record mode, replace the OIDs of the objects the test creates with numbers that are the same on every recording. See below.
+- `NormalizeColumn(column, prefix)`: in record mode, replace each value of a result column, such as a job ID, with `prefix` and a number, wherever it appears in the file. See below.
 
 ### Record and replay
 
@@ -121,7 +123,23 @@ Things to know:
 - The file is written when the test ends. Statements answered by expectations are not recorded.
 - The server must be in the same state each time you record. Clean up what the test creates, before and after.
 - If the program sends a different statement or different parameters, replay fails. Record again. The diff of the file shows what changed on the server side too.
-- Values that change on every run, such as timestamps and generated IDs, cannot match a recording if the program sends them back as parameters.
+- Values that change on every run, such as timestamps and generated IDs, cannot match a recording if the program sends them back as parameters. `NormalizeOIDs` and `NormalizeColumn` handle two kinds of them. See below.
+- If a new recording has the same answers as the file, the file is not written, so `recorded_at` does not change.
+
+### Values that change on every recording
+
+The server gives a new object a new OID, and some servers make up an ID for each job. These values make a new recording differ from the old one even when nothing else changed. Two options replace them when the file is written:
+
+- `NormalizeOIDs()` replaces each OID of 16384 or more in values of type `oid` and `oid[]`, in parameters and in result columns. The first OID that appears becomes 16384, the next new one 16385, and so on. OIDs below 16384 belong to the system catalogs and do not change, so they are kept. OIDs written into the statement text are not replaced.
+- `NormalizeColumn(column, prefix)` replaces each value of the result column `column` with `prefix` and a number: `prefix1` for the first value, `prefix2` for the next new one, and so on. The same value is replaced wherever else it appears in the file: in statements, parameters, rows and error messages.
+
+A program that sends such a value back gets the replaced value from the file in replay mode, so its statements still match. For example, with Aurora DSQL:
+
+```go
+opts = append(opts, pgstub.NormalizeOIDs(), pgstub.NormalizeColumn("job_id", "job-"))
+```
+
+`CREATE INDEX ASYNC` returns `job-1`, and the program's `CALL sys.wait_for_job('job-1')` matches the recorded statement.
 
 ### Matching
 
@@ -185,6 +203,8 @@ kill %1
 ```
 
 A statement that is not in the file gets an error, and the command prints it to stderr.
+
+`pgstub record` takes `--normalize-oids` and `--normalize-column COLUMN=PREFIX`, which do what `NormalizeOIDs` and `NormalizeColumn` do.
 
 ## Limitations
 

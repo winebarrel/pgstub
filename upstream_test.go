@@ -434,3 +434,64 @@ func TestTxStatus(t *testing.T) {
 	s := pgstub.Start(t, pgstub.Passthrough(connStr))
 	assert.Equal(t, want, txStatuses(t, connect(t, s.ConnString())))
 }
+
+// normalizeWorkload sends back what it reads: an OID as an oid[] argument,
+// and a generated job ID in the statement text.
+func normalizeWorkload(t *testing.T, connStr, schema string) []string {
+	t.Helper()
+	ctx := context.Background()
+	conn := connect(t, connStr)
+
+	_, err := conn.Exec(ctx, fmt.Sprintf("CREATE TABLE %s.t (id int)", schema))
+	require.NoError(t, err)
+
+	var oid uint32
+	require.NoError(t, conn.QueryRow(ctx, "SELECT oid FROM pg_class WHERE relname = 't' AND relnamespace = $1::regnamespace", schema).Scan(&oid))
+
+	var name string
+	require.NoError(t, conn.QueryRow(ctx, "SELECT relname FROM pg_class WHERE oid = ANY($1::oid[])", []uint32{oid}).Scan(&name))
+
+	var job string
+	require.NoError(t, conn.QueryRow(ctx, "SELECT md5(random()::text) AS job_id").Scan(&job))
+
+	var echoed string
+	require.NoError(t, conn.QueryRow(ctx, "SELECT '"+job+"'::text AS echoed").Scan(&echoed))
+
+	return []string{fmt.Sprint(oid), name, job, echoed}
+}
+
+func TestRecordNormalize(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+	file := filepath.Join(t.TempDir(), "record.yaml")
+	opts := []pgstub.Option{pgstub.NormalizeOIDs(), pgstub.NormalizeColumn("job_id", "job-")}
+
+	record := func() []byte {
+		connStr, schema := upstream(t)
+		s := pgstub.Start(t, append(opts, pgstub.Record(connStr, file))...)
+		recorded := normalizeWorkload(t, s.ConnString(), schema)
+		require.NoError(s.Close())
+		assert.NotEqual("16384", recorded[0], "the client sees the server's OID while recording")
+
+		b, err := os.ReadFile(file)
+		require.NoError(err)
+		return b
+	}
+
+	first := record()
+	yaml := string(first)
+	assert.Contains(yaml, `args: ['{16384}']`)
+	assert.Contains(yaml, `- ["16384"]`)
+	assert.Contains(yaml, `- [job-1]`)
+	assert.Contains(yaml, `query: SELECT 'job-1'::text AS echoed`)
+
+	// The server hands out new OIDs and job IDs, but the file comes out the
+	// same, recorded_at included.
+	time.Sleep(1100 * time.Millisecond)
+	assert.Equal(yaml, string(record()))
+
+	// The client sends back what the file answered, so the replay matches.
+	_, schema := upstream(t)
+	r := pgstub.Start(t, pgstub.Replay(file))
+	assert.Equal([]string{"16384", "t", "job-1", "job-1"}, normalizeWorkload(t, r.ConnString(), schema))
+}
