@@ -90,6 +90,8 @@ func loadCassette(file string) (*cassette, error) {
 	return &c, nil
 }
 
+// save writes the cassette to file. When the file already holds the same
+// answers, it is left as it is, so that recording again leaves no diff.
 func (c *cassette) save(file string) error {
 	c.RecordedAt = time.Now().UTC().Truncate(time.Second)
 
@@ -99,6 +101,10 @@ func (c *cassette) save(file string) error {
 
 	if err := enc.Encode(c); err != nil {
 		return err
+	}
+
+	if old, err := os.ReadFile(file); err == nil && sameContent(old, b.Bytes()) {
+		return nil
 	}
 
 	return os.WriteFile(file, b.Bytes(), 0o644)

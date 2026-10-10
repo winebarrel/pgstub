@@ -40,6 +40,9 @@ type config struct {
 	strict   bool
 	redact   []string
 	password func(context.Context) (string, error)
+	// normalizeOIDs and normalizeColumns are set by the Normalize options.
+	normalizeOIDs    bool
+	normalizeColumns map[string]string
 }
 
 // Option configures a stub.
@@ -285,6 +288,7 @@ func (s *Stub) Close() error {
 	s.wg.Wait()
 
 	if s.cfg.mode == modeRecord {
+		s.cassette.normalize(&s.cfg)
 		errs = append(errs, s.cassette.save(s.cfg.file))
 	}
 

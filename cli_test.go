@@ -75,6 +75,35 @@ func TestRecordCmd(t *testing.T) {
 	assert.Contains(t, string(b), "query: SELECT 'XXX'")
 }
 
+func TestRecordCmdNormalize(t *testing.T) {
+	upstreamConnStr, _ := upstream(t)
+	file := filepath.Join(t.TempDir(), "record.yaml")
+
+	connStr, _, stop := runCmd(t, &pgstub.RecordCmd{
+		Listen:          "127.0.0.1:0",
+		Upstream:        upstreamConnStr,
+		NormalizeOIDs:   true,
+		NormalizeColumn: []string{"job_id=job-"},
+		File:            file,
+	})
+	conn := connect(t, connStr)
+	ctx := context.Background()
+
+	var oid uint32
+	require.NoError(t, conn.QueryRow(ctx, `SELECT 100000::oid`).Scan(&oid))
+	var job string
+	require.NoError(t, conn.QueryRow(ctx, `SELECT md5('x') AS job_id`).Scan(&job))
+	require.NoError(t, conn.QueryRow(ctx, `SELECT '`+job+`'`).Scan(&job))
+
+	conn.Close(ctx)
+	require.NoError(t, stop())
+
+	b, err := os.ReadFile(file)
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `- ["16384"]`)
+	assert.Contains(t, string(b), "query: SELECT 'job-1'")
+}
+
 func TestCmdErrors(t *testing.T) {
 	c := &pgstub.Context{Context: context.Background(), Output: io.Discard, ErrOutput: io.Discard}
 
@@ -83,6 +112,9 @@ func TestCmdErrors(t *testing.T) {
 
 	err = (&pgstub.RecordCmd{Listen: "127.0.0.1:0", Redact: []string{"=x"}, File: "x.yaml"}).Run(c)
 	assert.ErrorContains(t, err, "want OLD=NEW")
+
+	err = (&pgstub.RecordCmd{Listen: "127.0.0.1:0", NormalizeColumn: []string{"job_id"}, File: "x.yaml"}).Run(c)
+	assert.ErrorContains(t, err, "want COLUMN=PREFIX")
 
 	err = (&pgstub.ReplayCmd{Listen: "127.0.0.1:0", File: "testdata/nosuchfile.yaml"}).Run(c)
 	assert.Error(t, err)
