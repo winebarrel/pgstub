@@ -1,0 +1,11 @@
+# The server that the passthrough and record tests talk to. The tests look
+# for it at port 15432 unless PGSTUB_TEST_UPSTREAM says otherwise.
+#
+#   docker compose up -d
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "15432:5432"

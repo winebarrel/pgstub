@@ -31,3 +31,8 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+# Built binary (anchored, so cmd/pgstub/ is not swept up too)
+/pgstub
+
+# GoReleaser output
+/dist/
