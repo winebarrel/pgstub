@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"net"
 	"slices"
 	"strings"
@@ -14,12 +13,12 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// defaultServerVersion is reported when there is no server to ask and the
-// record file does not say.
+// defaultServerVersion is reported when there is no server and the record
+// file has no version.
 const defaultServerVersion = "17.0"
 
-// reportedParams are the parameters sent to a client at startup, with what
-// is sent when there is no server to take them from.
+// reportedParams are the parameters sent to a client at startup, with the
+// values used when there is no server.
 var reportedParams = [][2]string{
 	{"server_version", ""},
 	{"server_encoding", "UTF8"},
@@ -54,8 +53,8 @@ type session struct {
 	stmts   map[string]*statement
 	portals map[string]*portal
 	tx      byte
-	// skipping is set by an error in the extended protocol, after which
-	// messages are ignored up to the next Sync.
+	// skipping is set after an error in the extended protocol. Messages are
+	// ignored until the next Sync.
 	skipping bool
 }
 
@@ -149,10 +148,6 @@ func (ss *session) startup(ctx context.Context) bool {
 			}
 		case *pgproto3.StartupMessage:
 			params = m.Parameters
-
-			if params == nil {
-				params = map[string]string{}
-			}
 		default:
 			return false
 		}
@@ -209,15 +204,9 @@ func (ss *session) startup(ctx context.Context) bool {
 	return true
 }
 
-// connect opens the connection to the server, with the runtime parameters
-// the client asked for.
+// connect connects to the server with the client's runtime parameters.
 func (ss *session) connect(ctx context.Context, params map[string]string) (*pgconn.PgConn, error) {
 	cfg := ss.stub.upstream.Copy()
-	cfg.RuntimeParams = maps.Clone(ss.stub.upstream.RuntimeParams)
-
-	if cfg.RuntimeParams == nil {
-		cfg.RuntimeParams = map[string]string{}
-	}
 
 	for _, k := range runtimeParamNames(params) {
 		cfg.RuntimeParams[k] = params[k]
@@ -236,8 +225,8 @@ func (ss *session) connect(ctx context.Context, params map[string]string) (*pgco
 	return pgconn.ConnectConfig(ctx, cfg)
 }
 
-// runtimeParamNames returns the startup parameters other than the user and
-// the database, which are the stub's own and not the server's.
+// runtimeParamNames returns the names of the startup parameters except the
+// user and the database. Those two are for the stub, not the server.
 func runtimeParamNames(params map[string]string) []string {
 	var names []string
 
@@ -344,7 +333,8 @@ func (ss *session) describe(ctx context.Context, m *pgproto3.Describe) {
 	ss.sendRowDescription(d, p.resultFormats)
 }
 
-// statementDesc returns the description of st, asking for it once.
+// statementDesc returns the description of st. It is looked up once and
+// then cached.
 func (ss *session) statementDesc(ctx context.Context, st *statement) *description {
 	if st.desc != nil {
 		return st.desc
@@ -470,8 +460,8 @@ func (ss *session) prepare(ctx context.Context, st *statement) *description {
 	return d
 }
 
-// readResult is ResultReader.Read, except that it keeps the columns of a
-// result without rows.
+// readResult is like ResultReader.Read, but it also keeps the columns when
+// there are no rows.
 func readResult(rr *pgconn.ResultReader) *pgconn.Result {
 	r := &pgconn.Result{}
 
@@ -598,7 +588,7 @@ func (ss *session) readyForQuery() {
 	ss.flush()
 }
 
-// flush sends what is buffered. A failure shows up as a failed read next.
+// flush sends buffered messages. If it fails, the next read fails too.
 func (ss *session) flush() {
 	_ = ss.be.Flush()
 }
@@ -619,8 +609,8 @@ func rowDescription(columns []string, types []uint32, formats []int16) *pgproto3
 	return &pgproto3.RowDescription{Fields: fields}
 }
 
-// formatFor returns the format of the i-th value: one code for all of them,
-// or one code each.
+// formatFor returns the format of the i-th value. formats has one code for
+// all values, or one code for each.
 func formatFor(formats []int16, i int) int16 {
 	switch {
 	case len(formats) == 1:

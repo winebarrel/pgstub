@@ -2,6 +2,8 @@ package pgstub_test
 
 import (
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgproto3"
@@ -176,4 +178,51 @@ func countSyncs(msgs []pgproto3.FrontendMessage) int {
 	}
 
 	return n
+}
+
+func TestProtocolBinaryResultErrors(t *testing.T) {
+	// A file fixed by hand can hold a value that is not of its type, and a
+	// type pgx has no binary format for.
+	file := filepath.Join(t.TempDir(), "x.yaml")
+	require.NoError(t, os.WriteFile(file, []byte(`exchanges:
+  - query: SELECT bad
+    columns: [n]
+    types: [int4]
+    rows: [[abc]]
+  - query: SELECT unknown
+    columns: [indkey]
+    types: ["22"]
+    rows: [[1 2]]
+`), 0o644))
+
+	s := pgstub.Start(t, pgstub.Replay(file))
+
+	for _, sql := range []string{"SELECT bad", "SELECT unknown"} {
+		t.Run(sql, func(t *testing.T) {
+			fe := rawConn(t, s)
+			fe.Send(&pgproto3.Parse{Query: sql})
+			fe.Send(&pgproto3.Bind{ResultFormatCodes: []int16{1}})
+			fe.Send(&pgproto3.Execute{})
+			fe.Send(&pgproto3.Sync{})
+			require.NoError(t, fe.Flush())
+
+			assert.Equal(t, []string{"ParseComplete", "BindComplete", "Error 22P03"}, receiveUntilReady(t, fe))
+		})
+	}
+}
+
+func TestProtocolDescribePortalError(t *testing.T) {
+	rec := &recorder{TB: t}
+	s := pgstub.Start(rec)
+	fe := rawConn(t, s)
+
+	fe.Send(&pgproto3.Parse{Query: "SELECT 1"})
+	fe.Send(&pgproto3.Bind{})
+	fe.Send(&pgproto3.Describe{ObjectType: 'P'})
+	fe.Send(&pgproto3.Execute{})
+	fe.Send(&pgproto3.Sync{})
+	require.NoError(t, fe.Flush())
+
+	assert.Equal(t, []string{"ParseComplete", "BindComplete", "Error XX000"}, receiveUntilReady(t, fe))
+	assert.Len(t, rec.errors, 1)
 }

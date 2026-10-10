@@ -7,21 +7,21 @@ import (
 	"strings"
 )
 
-// call is a statement a client sent.
+// call is a statement from a client.
 type call struct {
 	sql  string
 	norm string
 	// args is the parameters in text form, for matching and recording.
 	args []*string
-	// params, paramOIDs and paramFormats are the parameters as sent, for
-	// the server.
+	// params, paramOIDs and paramFormats are the parameters as the client
+	// sent them, for forwarding to the server.
 	params       [][]byte
 	paramOIDs    []uint32
 	paramFormats []int16
 	simple       bool
 }
 
-// description is what Describe of a statement answers.
+// description is the answer to Describe for a statement.
 type description struct {
 	paramOIDs []uint32
 	columns   []string
@@ -35,9 +35,8 @@ func normalizeSQL(sql string) string {
 
 var paramRef = regexp.MustCompile(`\$(\d+)`)
 
-// paramCount returns the highest $n in sql. It can be wrong for a $n in a
-// string literal, which only makes the description list a parameter the
-// client does not send.
+// paramCount returns the highest $n in sql. A $n in a string literal is
+// counted too. The only effect is an extra parameter in the description.
 func paramCount(sql string) int {
 	n := 0
 
@@ -50,8 +49,8 @@ func paramCount(sql string) int {
 	return n
 }
 
-// resolve answers a statement: from an expectation first, then as the mode
-// says.
+// resolve answers a statement from an expectation if one matches, and
+// otherwise as the mode says.
 func (s *Stub) resolve(ctx context.Context, ss *session, c *call) []Result {
 	s.mu.Lock()
 
@@ -99,10 +98,10 @@ func (s *Stub) resolve(ctx context.Context, ss *session, c *call) []Result {
 	return []Result{s.unexpected(c)}
 }
 
-// describe answers Describe of a statement before it runs. It does not use
-// up an expectation or an exchange, since the statement may run any number
-// of times after it, except an exchange that failed: the client gives up on
-// the statement at its error, so it never comes to run it.
+// describe answers Describe for a statement. It uses the first unused
+// expectation or exchange for the statement, but does not mark it as used,
+// because the statement runs after this. The exception is an exchange with
+// an error: the client stops at the error and never runs the statement.
 func (s *Stub) describe(ctx context.Context, ss *session, st *statement) *description {
 	norm := normalizeSQL(st.sql)
 	s.mu.Lock()
@@ -147,43 +146,27 @@ func (s *Stub) describe(ctx context.Context, ss *session, st *statement) *descri
 	return &description{err: s.unexpected(&call{sql: st.sql}).err}
 }
 
-// findExpect returns the first unused expectation for sql, or a used one
-// when all are used.
+// findExpect returns the first unused expectation for a statement.
 func (s *Stub) findExpect(norm string) *Expectation {
-	var used *Expectation
-
 	for _, e := range s.expects {
-		if e.sql == norm {
-			if !e.used {
-				return e
-			}
-
-			if used == nil {
-				used = e
-			}
+		if !e.used && e.sql == norm {
+			return e
 		}
 	}
 
-	return used
+	return nil
 }
 
-// findExchange is findExpect for the record file.
+// findExchange returns the index of the first unused exchange for a
+// statement, or -1.
 func (s *Stub) findExchange(norm string) int {
-	used := -1
-
 	for i, x := range s.cassette.Exchanges {
-		if normalizeSQL(x.Query) == norm {
-			if !s.used[i] {
-				return i
-			}
-
-			if used < 0 {
-				used = i
-			}
+		if !s.used[i] && normalizeSQL(x.Query) == norm {
+			return i
 		}
 	}
 
-	return used
+	return -1
 }
 
 func (s *Stub) unexpected(c *call) Result {

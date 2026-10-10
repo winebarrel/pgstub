@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,6 +60,9 @@ func TestExpect(t *testing.T) {
 		Return(pgstub.Error("0A000", "unsupported ALTER TABLE DROP COLUMN statement"))
 
 	conn := connect(t, s.ConnString())
+
+	// With no server and no file, a default version is reported.
+	assert.Equal("17.0", conn.PgConn().ParameterStatus("server_version"))
 
 	// Whitespace does not matter.
 	var jobID string
@@ -115,6 +119,18 @@ func TestExpectRowTypes(t *testing.T) {
 		{ID: 2, Name: "b", OK: false, At: ts, Tags: []string{}, Note: &n},
 	}, got)
 	assert.Equal("SELECT 2", rows.CommandTag().String())
+}
+
+func TestRowsUnknownType(t *testing.T) {
+	type point struct{ X, Y int }
+
+	s := pgstub.Start(t)
+	s.Expect(`SELECT p`).Return(pgstub.Rows([]string{"p"}, []any{point{1, 2}}))
+
+	// A value of a type pgx does not know is text, written with fmt.
+	var p string
+	require.NoError(t, connect(t, s.ConnString()).QueryRow(context.Background(), `SELECT p`).Scan(&p))
+	assert.Equal(t, "{1 2}", p)
 }
 
 func TestExpectArgs(t *testing.T) {
@@ -214,6 +230,61 @@ func TestExpectStartup(t *testing.T) {
 	// Without the parameter, the connection is accepted.
 	connect(t, s.ConnString())
 	assert.True(s.AssertExpectations(t))
+}
+
+func TestExpectStartupDefaultError(t *testing.T) {
+	s := pgstub.Start(t)
+	s.ExpectStartup("default_transaction_read_only")
+
+	cfg, err := pgx.ParseConfig(s.ConnString())
+	require.NoError(t, err)
+	cfg.RuntimeParams["default_transaction_read_only"] = "on"
+
+	_, err = pgx.ConnectConfig(context.Background(), cfg)
+	assert.Equal(t, "08P01", pgErrorCode(err))
+}
+
+func TestExpectNull(t *testing.T) {
+	assert := assert.New(t)
+	ctx := context.Background()
+
+	rec := &recorder{TB: t}
+	s := pgstub.Start(rec)
+	s.Expect(`SELECT name FROM t WHERE parent = $1`).
+		WithArgs(nil).
+		Return(pgstub.Rows([]string{"name"}, []any{(*string)(nil)}))
+	s.Expect(`SELECT name FROM t WHERE parent = $1`).
+		WithArgs("x").
+		Return(pgstub.Rows([]string{"name"}, []any{"y"}))
+
+	conn := connect(t, s.ConnString())
+
+	// NULL matches only NULL.
+	var name *string
+	assert.NoError(conn.QueryRow(ctx, `SELECT name FROM t WHERE parent = $1`, nil).Scan(&name))
+	assert.Nil(name)
+	assert.Error(conn.QueryRow(ctx, `SELECT name FROM t WHERE parent = $1`, nil).Scan(&name))
+	assert.Len(rec.errors, 1)
+}
+
+func TestClients(t *testing.T) {
+	ctx := context.Background()
+	s := pgstub.Start(t)
+	s.Expect(`SELECT 1`).Return(pgstub.Rows([]string{"n"}, []any{1}))
+
+	// A client that goes away before its startup message.
+	c, err := net.Dial("tcp", s.Addr().String())
+	require.NoError(t, err)
+	c.Close()
+
+	// A client that asks for TLS is told to go on in plain text.
+	conn := connect(t, strings.Replace(s.ConnString(), "sslmode=disable", "sslmode=prefer", 1))
+
+	// A cancel request has nothing to cancel.
+	assert.NoError(t, conn.PgConn().CancelRequest(ctx))
+
+	var n int
+	assert.NoError(t, conn.QueryRow(ctx, `SELECT 1`).Scan(&n))
 }
 
 func TestTransaction(t *testing.T) {
@@ -333,7 +404,15 @@ func TestReplayMiss(t *testing.T) {
 	var n int64
 	err := conn.QueryRow(ctx, `SELECT count(*) FROM public.users WHERE id > $1`, 11).Scan(&n)
 	assert.Equal(t, "XX000", pgErrorCode(err))
-	assert.Equal(t, []string{`pgstub: unexpected statement "SELECT count(*) FROM public.users WHERE id > $1" with args [11]`}, rec.errors)
+
+	// A statement the file does not hold fails when it is described.
+	_, err = conn.Exec(ctx, `DELETE FROM public.users WHERE id = $1`, 1)
+	assert.Equal(t, "XX000", pgErrorCode(err))
+
+	assert.Equal(t, []string{
+		`pgstub: unexpected statement "SELECT count(*) FROM public.users WHERE id > $1" with args [11]`,
+		`pgstub: unexpected statement "DELETE FROM public.users WHERE id = $1"`,
+	}, rec.errors)
 }
 
 func TestReplayExpectFirst(t *testing.T) {

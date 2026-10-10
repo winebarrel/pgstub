@@ -16,10 +16,10 @@ type Context struct {
 	ErrOutput io.Writer
 }
 
-// ReplayCmd answers from a record file.
+// ReplayCmd serves answers from a record file.
 type ReplayCmd struct {
 	Listen string   `short:"l" default:"127.0.0.1:5432" env:"PGSTUB_LISTEN" help:"Address to listen on."`
-	Redact []string `placeholder:"OLD=NEW" help:"Replace OLD with NEW in what a client sends before matching, as when recording."`
+	Redact []string `placeholder:"OLD=NEW" help:"Replace OLD with NEW in client statements before matching. Use the same values as for record."`
 	File   string   `arg:"" type:"existingfile" help:"Record file to answer from."`
 }
 
@@ -33,12 +33,12 @@ func (cmd *ReplayCmd) Run(c *Context) error {
 	return serve(c, cmd.Listen, append(opts, Replay(cmd.File))...)
 }
 
-// RecordCmd records what a server answers to a file.
+// RecordCmd records a server's answers to a file.
 type RecordCmd struct {
 	Listen   string   `short:"l" default:"127.0.0.1:5432" env:"PGSTUB_LISTEN" help:"Address to listen on."`
-	Upstream string   `short:"u" required:"" env:"PGSTUB_UPSTREAM" help:"Connection string of the server. The password can come from PGPASSWORD."`
-	Redact   []string `placeholder:"OLD=NEW" help:"Replace OLD with NEW in what is recorded."`
-	File     string   `arg:"" type:"path" help:"Record file to write when stopped."`
+	Upstream string   `short:"u" required:"" env:"PGSTUB_UPSTREAM" help:"Connection string of the server. PGPASSWORD can hold the password."`
+	Redact   []string `placeholder:"OLD=NEW" help:"Replace OLD with NEW in the recorded file."`
+	File     string   `arg:"" type:"path" help:"Record file to write on exit."`
 }
 
 func (cmd *RecordCmd) Run(c *Context) error {
@@ -67,8 +67,8 @@ func redactOptions(pairs []string) ([]Option, error) {
 	return opts, nil
 }
 
-// serve runs a stub until c.Context is canceled. It prints the connection
-// string first, so a script can wait for it.
+// serve runs a stub until c.Context is canceled. It first prints the
+// connection string, so that a script can wait for it.
 func serve(c *Context, addr string, opts ...Option) error {
 	s, err := New(opts...)
 

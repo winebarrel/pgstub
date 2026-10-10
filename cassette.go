@@ -11,8 +11,8 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// cassette is the record file. It holds the same things as expectations
-// written by hand, in a form a person can read and fix.
+// cassette is the record file. It holds the same kind of answers as
+// expectations, as YAML that people can read and edit.
 type cassette struct {
 	RecordedAt    time.Time      `yaml:"recorded_at,omitempty"`
 	ServerVersion string         `yaml:"server_version,omitempty"`
@@ -30,9 +30,9 @@ type rejectRecord struct {
 	Message string   `yaml:"message"`
 }
 
-// exchange is a statement and what the server answered. A simple query
-// holding several statements has one result per statement under results;
-// otherwise the result is inline.
+// exchange is a statement and the server's answer. If a simple query has
+// several statements, results has one entry for each. Otherwise the result
+// is inline.
 type exchange struct {
 	Query        string    `yaml:"query"`
 	Args         []*string `yaml:"args,omitempty,flow"`
@@ -78,8 +78,7 @@ func loadCassette(file string) (*cassette, error) {
 
 	m := pgtype.NewMap()
 
-	// Check the types now, so a typo fails when the file is loaded rather
-	// than when a statement first needs it.
+	// Check the types now, so that a typo fails at load time.
 	for i, x := range c.Exchanges {
 		if _, err := typeOIDs(m, x.ParamTypes); err != nil {
 			return nil, fmt.Errorf("%s: exchange %d: %w", file, i, err)
@@ -152,8 +151,8 @@ func toRecord(m *pgtype.Map, r Result) resultRecord {
 		rec.Rows = append(rec.Rows, row)
 	}
 
-	// The tag of rows is SELECT and the count unless the server said
-	// otherwise, as it does for INSERT ... RETURNING.
+	// Leave out the tag when it is "SELECT <row count>". It is different
+	// for INSERT ... RETURNING, for example.
 	if !r.hasRows() || r.tag != fmt.Sprintf("SELECT %d", len(r.rows)) {
 		rec.Complete = r.tag
 	}
@@ -192,8 +191,8 @@ func (rec resultRecord) toResult(m *pgtype.Map) (Result, error) {
 	return r, nil
 }
 
-// typeName returns the name of a type, or its OID for a type pgx does not
-// know.
+// typeName returns the name of a type, or its OID if pgx does not know the
+// type.
 func typeName(m *pgtype.Map, oid uint32) string {
 	if t, ok := m.TypeForOID(oid); ok {
 		return t.Name

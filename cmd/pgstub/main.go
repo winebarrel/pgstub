@@ -16,8 +16,8 @@ var version string
 var cli struct {
 	Version kong.VersionFlag
 
-	Replay pgstub.ReplayCmd `cmd:"" help:"Answer from a record file."`
-	Record pgstub.RecordCmd `cmd:"" help:"Record what a server answers to a file."`
+	Replay pgstub.ReplayCmd `cmd:"" help:"Serve answers from a record file."`
+	Record pgstub.RecordCmd `cmd:"" help:"Record a server's answers to a file."`
 }
 
 func main() {

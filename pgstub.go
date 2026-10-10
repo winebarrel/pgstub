@@ -1,14 +1,14 @@
 // Package pgstub is a PostgreSQL wire protocol stub for tests.
 //
-// A test starts a stub, says which statements to expect and what to return,
-// and hands the stub's connection string to the program under test. The stub
-// can also stand in front of a real server: it passes what it was not told
-// about through to the server, or records the server's answers to a file
-// that a later run replays without the server.
+// A test starts a stub, tells it which statements to expect and what to
+// return, and gives the stub's connection string to the program under test.
+// The stub can also forward other statements to a real server, and record
+// the server's answers to a file. A later test run can replay the file
+// without the server.
 //
-// The stub does not parse SQL. A statement is matched by its text with the
-// whitespace normalized, so syntax a stock PostgreSQL rejects is handled the
-// same as any other.
+// The stub does not parse SQL. It compares the statement text with the
+// whitespace normalized, so it also works for syntax that PostgreSQL does
+// not accept.
 package pgstub
 
 import (
@@ -45,8 +45,8 @@ type config struct {
 // Option configures a stub.
 type Option func(*config)
 
-// Passthrough sends statements without an expectation to the server at
-// connStr.
+// Passthrough forwards statements that match no expectation to the server
+// at connStr.
 func Passthrough(connStr string) Option {
 	return func(c *config) {
 		c.mode = modePassthrough
@@ -54,8 +54,8 @@ func Passthrough(connStr string) Option {
 	}
 }
 
-// Record sends statements without an expectation to the server at connStr
-// and writes what the server answered to file when the stub is closed.
+// Record forwards statements that match no expectation to the server at
+// connStr. When the stub is closed, it writes the server's answers to file.
 func Record(connStr, file string) Option {
 	return func(c *config) {
 		c.mode = modeRecord
@@ -64,8 +64,8 @@ func Record(connStr, file string) Option {
 	}
 }
 
-// Replay answers statements without an expectation from file. A statement
-// the file does not hold either fails the test.
+// Replay answers statements that match no expectation from file. If the
+// file has no answer, the test fails.
 func Replay(file string) Option {
 	return func(c *config) {
 		c.mode = modeReplay
@@ -73,27 +73,27 @@ func Replay(file string) Option {
 	}
 }
 
-// Strict fails the test on a statement without an expectation even in
-// passthrough mode.
+// Strict makes passthrough mode fail the test on a statement that matches
+// no expectation, instead of forwarding it.
 func Strict() Option {
 	return func(c *config) {
 		c.strict = true
 	}
 }
 
-// Redact replaces old with new in what is recorded, so that an endpoint or
-// an account ID does not end up in the file. In replay mode, the same
-// replacement is made in what a client sends before it is matched against
-// the file, so a test can pass the same options to both.
+// Redact replaces old with new in the recorded file, to keep values such as
+// endpoints and account IDs out of it. In replay mode, it replaces them in
+// the client's statements before matching. Pass the same Redact options to
+// Record and Replay.
 func Redact(old, new string) Option {
 	return func(c *config) {
 		c.redact = append(c.redact, old, new)
 	}
 }
 
-// UpstreamPassword sets how the password for the server is made. It is
-// called for each connection, which suits a token that expires such as a
-// DSQL IAM authentication token.
+// UpstreamPassword sets a function that returns the server password. It is
+// called for each connection, so it can return a short-lived token such as
+// a DSQL IAM auth token.
 func UpstreamPassword(f func(context.Context) (string, error)) Option {
 	return func(c *config) {
 		c.password = f
@@ -117,8 +117,7 @@ type Stub struct {
 	conns    map[net.Conn]struct{}
 	closed   bool
 	wg       sync.WaitGroup
-	// ctx is canceled by Close, to stop what sessions wait for on the
-	// server.
+	// Close cancels ctx so that sessions stop waiting for the server.
 	ctx    context.Context
 	cancel context.CancelFunc
 }
@@ -168,9 +167,9 @@ func New(opts ...Option) (*Stub, error) {
 	return s, nil
 }
 
-// Start makes a stub listening on a local port for the length of the test.
-// A statement the stub cannot answer fails t. When the test ends, the stub
-// is closed and, in record mode, the file is written.
+// Start starts a stub on a local port. If the stub cannot answer a
+// statement, t fails. The stub is closed when the test ends, and in record
+// mode the file is written then.
 func Start(t testing.TB, opts ...Option) *Stub {
 	t.Helper()
 
@@ -254,14 +253,14 @@ func (s *Stub) Addr() net.Addr {
 	return s.ln.Addr()
 }
 
-// ConnString returns a connection string for the stub. The user and the
-// database are not checked, so any will do.
+// ConnString returns a connection string for the stub. The stub does not
+// check the user or the database name.
 func (s *Stub) ConnString() string {
 	return fmt.Sprintf("postgres://pgstub@%s/pgstub?sslmode=disable", s.Addr())
 }
 
-// Close stops the stub and closes the open connections. In record mode it
-// then writes the file.
+// Close stops the stub and closes its connections. In record mode, it also
+// writes the file.
 func (s *Stub) Close() error {
 	s.mu.Lock()
 
@@ -292,8 +291,8 @@ func (s *Stub) Close() error {
 	return errors.Join(errs...)
 }
 
-// AssertExpectations reports to t each expectation that no statement used,
-// and returns whether all were used.
+// AssertExpectations reports each expectation that was not used to t. It
+// returns true if all expectations were used.
 func (s *Stub) AssertExpectations(t testing.TB) bool {
 	t.Helper()
 

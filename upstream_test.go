@@ -47,7 +47,10 @@ func TestPassthrough(t *testing.T) {
 		Return(pgstub.Rows([]string{"job_id"}, []any{"j1"}))
 
 	conn := connect(t, s.ConnString())
-	assert.NotEqual("17.0", conn.PgConn().ParameterStatus("server_version")+"x")
+
+	// The client sees the server's version.
+	direct := connect(t, connStr)
+	assert.Equal(direct.PgConn().ParameterStatus("server_version"), conn.PgConn().ParameterStatus("server_version"))
 
 	_, err := conn.Exec(ctx, fmt.Sprintf(`CREATE TABLE %s.t (c int)`, schema))
 	require.NoError(err)
@@ -76,13 +79,53 @@ func TestPassthroughStrict(t *testing.T) {
 
 	rec := &recorder{TB: t}
 	s := pgstub.Start(rec, pgstub.Passthrough(connStr), pgstub.Strict())
+	s.Expect(`SELECT 2`).Return(pgstub.Rows([]string{"n"}, []any{2}))
 	conn := connect(t, s.ConnString())
+
+	var n int
+	assert.NoError(t, conn.QueryRow(context.Background(), `SELECT 2`).Scan(&n))
+	assert.Equal(t, 2, n)
 
 	_, err := conn.Exec(context.Background(), `SELECT 1`)
 	assert.Equal(t, "XX000", pgErrorCode(err))
 	_, err = conn.Exec(context.Background(), `SELECT $1::int`, 1)
 	assert.Equal(t, "XX000", pgErrorCode(err))
 	assert.Len(t, rec.errors, 2)
+}
+
+func TestPassthroughStartupReject(t *testing.T) {
+	connStr, _ := upstream(t)
+	s := pgstub.Start(t, pgstub.Passthrough(connStr))
+
+	cfg, err := pgx.ParseConfig(s.ConnString())
+	require.NoError(t, err)
+	cfg.RuntimeParams["default_transaction_read_only"] = "bogus"
+
+	_, err = pgx.ConnectConfig(context.Background(), cfg)
+	assert.Equal(t, "22023", pgErrorCode(err))
+}
+
+func TestUpstreamLost(t *testing.T) {
+	ctx := context.Background()
+	connStr, _ := upstream(t)
+
+	rec := &recorder{TB: t}
+	s := pgstub.Start(rec, pgstub.Passthrough(connStr))
+	conn := connect(t, s.ConnString())
+
+	var pid int32
+	require.NoError(t, conn.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&pid))
+
+	_, err := connect(t, connStr).Exec(ctx, `SELECT pg_terminate_backend($1)`, pid)
+	require.NoError(t, err)
+
+	// The server says why it closed the connection, and after that there
+	// is no connection to send to.
+	_, err = conn.Exec(ctx, `SELECT 1`)
+	assert.Equal(t, "57P01", pgErrorCode(err))
+	_, err = conn.Exec(ctx, `SELECT 1`)
+	assert.Equal(t, "08006", pgErrorCode(err))
+	assert.Len(t, rec.errors, 1)
 }
 
 func TestUpstreamDown(t *testing.T) {
@@ -133,6 +176,15 @@ func workload(t *testing.T, connStr, schema string) []string {
 	tag, err := conn.Exec(ctx, fmt.Sprintf(`CREATE TABLE %s.users (id int PRIMARY KEY, name text, tags text[], at timestamptz, secret text)`, schema))
 	add(tag, err)
 
+	// The same statement before and after a change.
+	count := func() {
+		var n int64
+		require.NoError(t, conn.QueryRow(ctx, fmt.Sprintf(`SELECT count(*) FROM %s.users`, schema)).Scan(&n))
+		add(n)
+	}
+
+	count()
+
 	tx, err := conn.Begin(ctx)
 	require.NoError(t, err)
 
@@ -143,6 +195,7 @@ func workload(t *testing.T, connStr, schema string) []string {
 	}
 
 	add(tx.Commit(ctx))
+	count()
 
 	rows, err := conn.Query(ctx, fmt.Sprintf(`SELECT id, name, tags, at, secret FROM %s.users WHERE id >= $1 ORDER BY id`, schema), 2)
 	require.NoError(t, err)
@@ -171,6 +224,11 @@ func workload(t *testing.T, connStr, schema string) []string {
 	_, err = conn.Exec(ctx, fmt.Sprintf(`INSERT INTO %s.users (id) VALUES (1)`, schema))
 	add(pgErrorCode(err))
 
+	// A type pgx does not know comes in text.
+	var indkey string
+	require.NoError(t, conn.QueryRow(ctx, `SELECT indkey FROM pg_index WHERE indrelid = $1::regclass`, schema+".users").Scan(&indkey))
+	add(indkey)
+
 	_, err = conn.Exec(ctx, `SELECT nope FROM pg_class WHERE oid = $1`, 1)
 	add(pgErrorCode(err))
 
@@ -198,13 +256,16 @@ func TestRecordReplay(t *testing.T) {
 	require.NoError(s.Close())
 
 	assert.Equal("CREATE TABLE <nil>\n"+
+		"0\n"+
 		"INSERT 0 1 <nil>\nINSERT 0 1 <nil>\nINSERT 0 1 <nil>\n"+
 		"<nil>\n"+
+		"3\n"+
 		"2 user2 [a b c] 2026-07-23 00:00:02 +0000 UTC acct-123456\n"+
 		"3 user3 [a b c] 2026-07-23 00:00:03 +0000 UTC acct-123456\n"+
 		"<nil>\n"+
 		"false 1\n"+
 		"23505\n"+
+		"1\n"+
 		"42703\n"+
 		"SET []\n"+
 		"SELECT 1 [[[51]]]\n"+
@@ -219,6 +280,7 @@ func TestRecordReplay(t *testing.T) {
 	assert.Contains(yaml, "types: [int4, text, _text, timestamptz, text]")
 	assert.Contains(yaml, "acct-XXX")
 	assert.NotContains(yaml, "acct-123456")
+	assert.Contains(yaml, `types: ["22"]`)
 	assert.Contains(yaml, "complete: INSERT 0 1")
 	assert.NotContains(yaml, "complete: SELECT 2")
 
@@ -263,4 +325,29 @@ func TestRecordStartupReject(t *testing.T) {
 
 	r := pgstub.Start(t, pgstub.Replay(file))
 	assert.Equal("22023", pgErrorCode(connectRO(r.ConnString())))
+}
+
+func TestRecordWithExpect(t *testing.T) {
+	ctx := context.Background()
+	connStr, _ := upstream(t)
+	file := filepath.Join(t.TempDir(), "record.yaml")
+
+	s := pgstub.Start(t, pgstub.Record(connStr, file))
+	s.Expect(`SELECT 'expected'`).Return(pgstub.Rows([]string{"v"}, []any{"from the test"}))
+	conn := connect(t, s.ConnString())
+
+	var v string
+	require.NoError(t, conn.QueryRow(ctx, `SELECT 'expected'`).Scan(&v))
+	assert.Equal(t, "from the test", v)
+	require.NoError(t, conn.QueryRow(ctx, `SELECT 'recorded'`).Scan(&v))
+	assert.Equal(t, "recorded", v)
+
+	conn.Close(ctx)
+	require.NoError(t, s.Close())
+
+	// Only what the server answered is in the file.
+	b, err := os.ReadFile(file)
+	require.NoError(t, err)
+	assert.Contains(t, string(b), "SELECT 'recorded'")
+	assert.NotContains(t, string(b), "expected")
 }

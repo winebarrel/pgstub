@@ -7,8 +7,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// Result is what the stub answers a statement with: rows, a command tag or
-// an error.
+// Result is the answer to a statement: rows, a command tag or an error.
 type Result struct {
 	columns []string
 	types   []uint32
@@ -23,8 +22,7 @@ type pgError struct {
 }
 
 // Rows returns rows. The type of each column comes from the Go type of its
-// first non-nil value, and a column of nil values only is text. A nil value
-// is NULL.
+// first non-nil value. A column with only nil values is text. nil is NULL.
 func Rows(columns []string, rows ...[]any) Result {
 	m := pgtype.NewMap()
 	r := Result{columns: columns, types: make([]uint32, len(columns))}
@@ -117,8 +115,8 @@ func redactArgs(rep *strings.Replacer, values []*string) []*string {
 	return out
 }
 
-// valueToText encodes a Go value in the text format of oid, falling back to
-// fmt for a value the type does not take.
+// valueToText encodes a Go value in the text format of oid. If that fails,
+// it uses fmt.
 func valueToText(m *pgtype.Map, oid uint32, v any) *string {
 	if v == nil {
 		return nil
