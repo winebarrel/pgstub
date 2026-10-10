@@ -2,6 +2,7 @@ package pgstub_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/winebarrel/pgstub"
@@ -324,8 +326,26 @@ func TestEmptyQuery(t *testing.T) {
 	s := pgstub.Start(t)
 	conn := connect(t, s.ConnString())
 
-	_, err := conn.Exec(context.Background(), " ")
-	require.NoError(t, err)
+	// Only whitespace and comments, as the pgx driver for database/sql
+	// sends to ping.
+	for _, sql := range []string{" ", "-- ping", "/* a /* nested */ comment */\n-- and a line", "-- line\n  "} {
+		_, err := conn.Exec(context.Background(), sql)
+		require.NoError(t, err, sql)
+	}
+}
+
+func TestNotEmptyQuery(t *testing.T) {
+	rec := &recorder{TB: t}
+	s := pgstub.Start(rec)
+	conn := connect(t, s.ConnString())
+
+	// A statement after a comment, and a comment that is not closed.
+	for _, sql := range []string{"-- c\nSELECT 1", "/* c */ SELECT 1", "/* not closed"} {
+		_, err := conn.Exec(context.Background(), sql)
+		assert.Equal(t, "XX000", pgErrorCode(err), sql)
+	}
+
+	assert.Len(t, rec.errors, 3)
 }
 
 func TestReplay(t *testing.T) {
@@ -468,4 +488,25 @@ func TestServe(t *testing.T) {
 	require.NoError(t, s.Close())
 	require.NoError(t, <-served)
 	require.NoError(t, s.Close())
+}
+
+func TestDatabaseSQL(t *testing.T) {
+	s := pgstub.Start(t)
+	s.Expect(`SELECT name FROM t WHERE id = $1`).WithArgs(1).
+		Return(pgstub.Rows([]string{"name"}, []any{"one"}))
+	s.Expect(`SELECT name FROM t WHERE id = $1`).WithArgs(2).
+		Return(pgstub.Rows([]string{"name"}, []any{"two"}))
+
+	db, err := sql.Open("pgx", s.ConnString())
+	require.NoError(t, err)
+	defer db.Close()
+
+	// The driver pings the connection before it uses it again.
+	for id, want := range map[int]string{1: "one", 2: "two"} {
+		var name string
+		require.NoError(t, db.QueryRowContext(t.Context(), `SELECT name FROM t WHERE id = $1`, id).Scan(&name))
+		assert.Equal(t, want, name)
+	}
+
+	assert.True(t, s.AssertExpectations(t))
 }
