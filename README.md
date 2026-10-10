@@ -152,7 +152,7 @@ The command does the same for tests that are not written in Go. It serves or rec
 To record, start the command, run your tests against it, then stop it to write the file:
 
 ```sh
-pgstub record -u "postgres://admin@abc123.dsql.us-east-1.on.aws/postgres?sslmode=require" schema.yaml
+pgstub record -u "postgres://admin@abc123.dsql.us-east-1.on.aws/postgres?sslmode=require" recording.yaml
 # In another terminal:
 psql "postgres://pgstub@127.0.0.1:5432/pgstub?sslmode=disable" -f apply.sql
 # Then press Ctrl-C in the first terminal.
@@ -161,7 +161,7 @@ psql "postgres://pgstub@127.0.0.1:5432/pgstub?sslmode=disable" -f apply.sql
 To replay, start the command in the background and run the same tests:
 
 ```sh
-pgstub replay schema.yaml &
+pgstub replay recording.yaml &
 psql "postgres://pgstub@127.0.0.1:5432/pgstub?sslmode=disable" -f apply.sql
 kill %1
 ```
