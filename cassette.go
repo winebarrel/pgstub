@@ -1,14 +1,13 @@
 package pgstub
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // cassette is the record file. It holds the same kind of answers as
@@ -95,19 +94,23 @@ func loadCassette(file string) (*cassette, error) {
 func (c *cassette) save(file string) error {
 	c.RecordedAt = time.Now().UTC().Truncate(time.Second)
 
-	var b bytes.Buffer
-	enc := yaml.NewEncoder(&b)
-	enc.SetIndent(2)
+	// Keep the v3 style, and do not wrap long lines, so that rows stay on
+	// one line.
+	b, err := yaml.Dump(c,
+		yaml.WithV3Defaults(),
+		yaml.WithIndent(2),
+		yaml.WithLineWidth(-1),
+	)
 
-	if err := enc.Encode(c); err != nil {
+	if err != nil {
 		return err
 	}
 
-	if old, err := os.ReadFile(file); err == nil && sameContent(old, b.Bytes()) {
+	if old, err := os.ReadFile(file); err == nil && sameContent(old, b) {
 		return nil
 	}
 
-	return os.WriteFile(file, b.Bytes(), 0o644)
+	return os.WriteFile(file, b, 0o644)
 }
 
 func (x *exchange) results() []resultRecord {
