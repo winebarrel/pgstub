@@ -89,18 +89,23 @@ func loadCassette(file string) (*cassette, error) {
 	return &c, nil
 }
 
+// dumpYAML encodes a cassette. It keeps the v3 style, and does not wrap
+// long lines, so that rows stay on one line. It is a variable so that a test
+// can make it fail: the cassette types themselves always encode.
+var dumpYAML = func(v any) ([]byte, error) {
+	return yaml.Dump(v,
+		yaml.WithV3Defaults(),
+		yaml.WithIndent(2),
+		yaml.WithLineWidth(-1),
+	)
+}
+
 // save writes the cassette to file. When the file already holds the same
 // answers, it is left as it is, so that recording again leaves no diff.
 func (c *cassette) save(file string) error {
 	c.RecordedAt = time.Now().UTC().Truncate(time.Second)
 
-	// Keep the v3 style, and do not wrap long lines, so that rows stay on
-	// one line.
-	b, err := yaml.Dump(c,
-		yaml.WithV3Defaults(),
-		yaml.WithIndent(2),
-		yaml.WithLineWidth(-1),
-	)
+	b, err := dumpYAML(c)
 
 	if err != nil {
 		return err
