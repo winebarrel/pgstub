@@ -1,6 +1,7 @@
 package pgstub
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -157,4 +158,17 @@ func TestSaveKeepsUnchangedFile(t *testing.T) {
 	changed, err := os.ReadFile(file)
 	require.NoError(t, err)
 	assert.Contains(t, string(changed), "SELECT 2")
+}
+
+// When the cassette cannot be encoded, save returns the error and does not
+// write the file.
+func TestSaveEncodeError(t *testing.T) {
+	orig := dumpYAML
+	t.Cleanup(func() { dumpYAML = orig })
+	dumpYAML = func(any) ([]byte, error) { return nil, errors.New("encode failed") }
+
+	file := filepath.Join(t.TempDir(), "record.yaml")
+	err := (&cassette{}).save(file)
+	require.EqualError(t, err, "encode failed")
+	assert.NoFileExists(t, file)
 }

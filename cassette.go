@@ -1,14 +1,13 @@
 package pgstub
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // cassette is the record file. It holds the same kind of answers as
@@ -90,24 +89,33 @@ func loadCassette(file string) (*cassette, error) {
 	return &c, nil
 }
 
+// dumpYAML encodes a cassette. It keeps the v3 style, and does not wrap
+// long lines, so that rows stay on one line. It is a variable so that a test
+// can make it fail: the cassette types themselves always encode.
+var dumpYAML = func(v any) ([]byte, error) {
+	return yaml.Dump(v,
+		yaml.WithV3Defaults(),
+		yaml.WithIndent(2),
+		yaml.WithLineWidth(-1),
+	)
+}
+
 // save writes the cassette to file. When the file already holds the same
 // answers, it is left as it is, so that recording again leaves no diff.
 func (c *cassette) save(file string) error {
 	c.RecordedAt = time.Now().UTC().Truncate(time.Second)
 
-	var b bytes.Buffer
-	enc := yaml.NewEncoder(&b)
-	enc.SetIndent(2)
+	b, err := dumpYAML(c)
 
-	if err := enc.Encode(c); err != nil {
+	if err != nil {
 		return err
 	}
 
-	if old, err := os.ReadFile(file); err == nil && sameContent(old, b.Bytes()) {
+	if old, err := os.ReadFile(file); err == nil && sameContent(old, b) {
 		return nil
 	}
 
-	return os.WriteFile(file, b.Bytes(), 0o644)
+	return os.WriteFile(file, b, 0o644)
 }
 
 func (x *exchange) results() []resultRecord {
